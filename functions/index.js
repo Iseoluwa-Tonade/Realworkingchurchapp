@@ -1,49 +1,54 @@
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
+const { onDocumentUpdated } = require("firebase-functions/v2/firestore");
+const sgMail = require('@sendgrid/mail');
 
 admin.initializeApp();
 
+// Set the SendGrid API key from the environment variables
+sgMail.setApiKey(functions.config().sendgrid.key);
+
+// This is the email address that will receive the notification alerts.
+const ADMIN_EMAIL = "your-admin-email@example.com"; // <-- IMPORTANT: Change this to your admin email
+const FROM_EMAIL = "notifications@your-church-domain.com"; // <-- IMPORTANT: Change this to a verified SendGrid sender
+
 /**
- * This is a placeholder for a Cloud Function that would be triggered
- * when a member's status is updated in Firestore. This is the "backend"
- * for the "Automations" feature.
- *
- * For example, if a member's status changes to 'Sick', this function could
- * trigger sending a pre-defined email or WhatsApp message.
+ * This Cloud Function triggers when a member's status is updated.
+ * It sends an email notification to the administrator.
  */
-exports.runMemberStatusAutomation = functions.firestore
-    .document("churches/{churchId}/members/{memberId}")
-    .onUpdate(async (change, context) => {
-        const { churchId, memberId } = context.params;
-        const beforeData = change.before.data();
-        const afterData = change.after.data();
+exports.runMemberStatusAutomation = onDocumentUpdated("churches/{churchId}/members/{memberId}", async (event) => {
+    const beforeData = event.data.before.data();
+    const afterData = event.data.after.data();
 
-        // Check if the status has actually changed
-        if (beforeData.status === afterData.status) {
-            console.log(`Status for member ${memberId} in church ${churchId} has not changed.`);
-            return null;
-        }
-
-        console.log(`Status for member ${memberId} changed to ${afterData.status}`);
-
-        // 1. Query the 'automations' sub-collection for a matching rule.
-        // const automationsRef = admin.firestore().collection(`churches/${churchId}/automations`);
-        // const snapshot = await automationsRef.where('trigger.status', '==', afterData.status).get();
-
-        // if (snapshot.empty) {
-        //     console.log("No matching automation found.");
-        //     return null;
-        // }
-
-        // 2. For each matching rule, execute the action (e.g., send email).
-        // snapshot.forEach(doc => {
-        //     const rule = doc.data();
-        //     console.log(`Executing action: ${rule.action.type} for rule: ${rule.name}`);
-        //     // Here you would integrate with an email service like SendGrid or a WhatsApp API.
-        // });
-
+    if (beforeData.status === afterData.status) {
+        functions.logger.log("Status has not changed for member:", event.params.memberId);
         return null;
-    });
+    }
+
+    functions.logger.log(`Status for ${afterData.name} changed to ${afterData.status}`);
+
+    const msg = {
+        to: ADMIN_EMAIL,
+        from: FROM_EMAIL,
+        subject: `Member Status Update: ${afterData.name}`,
+        html: `
+            <p>Hello Admin,</p>
+            <p>The status for church member <strong>${afterData.name}</strong> has been updated from <strong>${beforeData.status}</strong> to <strong>${afterData.status}</strong>.</p>
+            <p>You can view their profile in the church management app.</p>
+            <p>Thank you,</p>
+            <p>Your Church App</p>
+        `,
+    };
+
+    try {
+        await sgMail.send(msg);
+        functions.logger.log("Admin notification email sent successfully.");
+    } catch (error) {
+        functions.logger.error("Error sending admin notification email:", error);
+    }
+
+    return null;
+});
 
 
 /**
